@@ -45,30 +45,34 @@ func (mw *middlewareWriter) WriteHeader(status int) {
 	mw.status = status
 	mw.headerSent = true
 
-	if cenc := mw.Header().Get("content-encoding"); cenc != "" {
+	cenc := mw.Header().Get("content-encoding")
+	ctype := mw.Header().Get("content-type")
+
+	// if content encoding already defined
+	// or content type is not defined
+	// or content type is not in allowed list
+	// => just forward the body
+	if cenc != "" || ctype == "" || !matchRegexes(ctype, mw.m.allowedType) {
+		mw.dontEncode = true
 		mw.ResponseWriter.WriteHeader(status)
 		return
 	}
 
-	if ctype := mw.Header().Get("content-type"); ctype != "" {
-		if !matchRegexes(ctype, mw.m.allowedType) {
-			mw.dontEncode = true
-			mw.ResponseWriter.WriteHeader(status)
+	// if content length is big enough, start encoding now
+	if clen := mw.Header().Get("content-length"); clen != "" {
+		len, err := strconv.ParseUint(clen, 10, 64)
+		if err == nil {
+			if len >= mw.m.minSize {
+				mw.startEncoding()
+			} else {
+				mw.dontEncode = true
+				mw.ResponseWriter.WriteHeader(status)
+			}
 			return
 		}
 	}
 
-	if clen := mw.Header().Get("content-length"); clen != "" {
-		len, err := strconv.ParseUint(clen, 10, 64)
-		if err == nil {
-			if len > mw.m.minSize {
-				mw.startEncoding()
-				return
-			}
-		}
-	}
-
-	// buffer the content until
+	// the content length is unknown, buffer the response until it exceeds minSize
 	mw.buff = make([]byte, mw.m.minSize)
 }
 
@@ -119,7 +123,7 @@ func (mw *middlewareWriter) Write(chunk []byte) (int, error) {
 		}
 		return mw.ResponseWriter.Write(chunk)
 	}
-	n := copy(mw.buff[mw.buffLen:], chunk[:])
+	n := copy(mw.buff[mw.buffLen:], chunk)
 	mw.buffLen = newBufLen
 	return n, nil
 }

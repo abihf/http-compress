@@ -48,25 +48,25 @@ func newMiddleware(h http.Handler, options ...Option) *middleware {
 }
 
 func (m *middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// for cache validation
+	w.Header().Add("Vary", "Accept-Encoding")
+
 	encoding := nego.NegotiateContentEncoding(r, m.supportedEncoding...)
 	enc, ok := m.encoders[encoding]
-	if !ok {
-		m.Handler.ServeHTTP(w, r)
-		return
+	if ok {
+		mw := &middlewareWriter{
+			ResponseWriter: w,
+			ctx:            r.Context(),
+			factory:        enc.factory,
+			encoding:       encoding,
+			m:              m,
+			status:         http.StatusOK,
+		}
+		defer mw.flush()
+		w = mw
 	}
 
-	mw := &middlewareWriter{
-		ResponseWriter: w,
-		ctx:            r.Context(),
-		factory:        enc.factory,
-		encoding:       encoding,
-		m:              m,
-		status:         http.StatusOK,
-	}
-	defer mw.flush()
-
-	m.Handler.ServeHTTP(mw, r)
-
+	m.Handler.ServeHTTP(w, r)
 }
 
 func (m *middleware) populateSupportedEncoding() {
