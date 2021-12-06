@@ -7,17 +7,17 @@ import (
 	"regexp"
 )
 
-type Option func(m *middleware)
+type Option func(*config)
 
 func WithEncoder(encoding string, priotity int, factory EncoderFactory) Option {
-	return func(m *middleware) {
+	return func(m *config) {
 		m.encoders[encoding] = &encoder{priority: priotity, factory: factory}
 	}
 }
 
 func WihtoutEncoder(encoding string) Option {
-	return func(m *middleware) {
-		delete(m.encoders, encoding)
+	return func(c *config) {
+		delete(c.encoders, encoding)
 	}
 }
 
@@ -28,19 +28,19 @@ func WithGzip(priority, level int) Option {
 }
 
 func WithAllowedTypes(list []*regexp.Regexp) Option {
-	return func(m *middleware) {
-		m.allowedType = list
+	return func(c *config) {
+		c.allowedType = list
 	}
 }
 
 func WithMinSize(minSize uint64) Option {
-	return func(m *middleware) {
-		m.minSize = minSize
+	return func(c *config) {
+		c.minSize = minSize
 	}
 }
 
 func WithSilent() Option {
-	return func(m *middleware) {
-		m.silent = true
+	return func(c *config) {
+		c.silent = true
 	}
 }

@@ -1,12 +1,9 @@
 package compress
 
 import (
-	"compress/gzip"
 	"context"
 	"io"
 	"net/http"
-	"regexp"
-	"sort"
 
 	"github.com/kevinpollet/nego"
 )
@@ -18,72 +15,33 @@ type encoder struct {
 	factory  EncoderFactory
 }
 
-type middleware struct {
-	http.Handler
+type Middleware func(http.Handler) http.Handler
 
-	supportedEncoding []string
+func New(options ...Option) Middleware {
+	c := newConfig(options...)
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("Vary", "Accept-Encoding")
 
-	encoders    map[string]*encoder
-	allowedType []*regexp.Regexp
-	minSize     uint64
-	silent      bool
+			encoding := nego.NegotiateContentEncoding(r, c.supportedEncoding...)
+			enc, ok := c.encoders[encoding]
+			if ok {
+				mw := &responseWriter{
+					ResponseWriter: w,
+					ctx:            r.Context(),
+					factory:        enc.factory,
+					encoding:       encoding,
+					c:              c,
+					status:         http.StatusOK,
+				}
+				defer mw.flush()
+				w = mw
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
 }
 
-var DefaultAllowedTypes = []*regexp.Regexp{
-	regexp.MustCompile(`^text/`),
-	regexp.MustCompile(`^application/json`),
-	regexp.MustCompile(`^application/javascript`),
-	regexp.MustCompile(`\+(xml|json)$`),
-	regexp.MustCompile(`^image/svg`),
-}
-
-func newMiddleware(h http.Handler, options ...Option) *middleware {
-	m := &middleware{Handler: h, minSize: 4 * 1024, allowedType: DefaultAllowedTypes, encoders: map[string]*encoder{}}
-	WithGzip(100, gzip.DefaultCompression)(m)
-	for _, o := range options {
-		o(m)
-	}
-	m.populateSupportedEncoding()
-	return m
-}
-
-func (m *middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// for cache validation
-	w.Header().Add("Vary", "Accept-Encoding")
-
-	encoding := nego.NegotiateContentEncoding(r, m.supportedEncoding...)
-	enc, ok := m.encoders[encoding]
-	if ok {
-		mw := &middlewareWriter{
-			ResponseWriter: w,
-			ctx:            r.Context(),
-			factory:        enc.factory,
-			encoding:       encoding,
-			m:              m,
-			status:         http.StatusOK,
-		}
-		defer mw.flush()
-		w = mw
-	}
-
-	m.Handler.ServeHTTP(w, r)
-}
-
-func (m *middleware) populateSupportedEncoding() {
-	type encoderWithName struct {
-		*encoder
-		name string
-	}
-
-	encList := make([]encoderWithName, 0, len(m.encoders))
-	for name, enc := range m.encoders {
-		encList = append(encList, encoderWithName{enc, name})
-	}
-	sort.Slice(encList, func(i, j int) bool {
-		return encList[i].priority < encList[j].priority
-	})
-	m.supportedEncoding = make([]string, 0, len(encList))
-	for _, enc := range encList {
-		m.supportedEncoding = append(m.supportedEncoding, enc.name)
-	}
+func Handler(h http.Handler, options ...Option) http.Handler {
+	return New(options...)(h)
 }

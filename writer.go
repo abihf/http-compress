@@ -10,9 +10,9 @@ import (
 	"sync"
 )
 
-type middlewareWriter struct {
+type responseWriter struct {
 	http.ResponseWriter
-	m        *middleware
+	c        *config
 	ctx      context.Context
 	factory  EncoderFactory
 	enc      io.WriteCloser
@@ -39,100 +39,100 @@ func matchRegexes(str string, res []*regexp.Regexp) bool {
 	return false
 }
 
-func (mw *middlewareWriter) WriteHeader(status int) {
-	mw.mutex.Lock()
-	defer mw.mutex.Unlock()
-	mw.status = status
-	mw.headerSent = true
+func (rw *responseWriter) WriteHeader(status int) {
+	rw.mutex.Lock()
+	defer rw.mutex.Unlock()
+	rw.status = status
+	rw.headerSent = true
 
-	cenc := mw.Header().Get("content-encoding")
-	ctype := mw.Header().Get("content-type")
+	cenc := rw.Header().Get("content-encoding")
+	ctype := rw.Header().Get("content-type")
 
 	// if content encoding already defined
 	// or content type is not defined
 	// or content type is not in allowed list
 	// => just forward the body
-	if cenc != "" || ctype == "" || !matchRegexes(ctype, mw.m.allowedType) {
-		mw.dontEncode = true
-		mw.ResponseWriter.WriteHeader(status)
+	if cenc != "" || ctype == "" || !matchRegexes(ctype, rw.c.allowedType) {
+		rw.dontEncode = true
+		rw.ResponseWriter.WriteHeader(status)
 		return
 	}
 
 	// if content length is big enough, start encoding now
-	if clen := mw.Header().Get("content-length"); clen != "" {
+	if clen := rw.Header().Get("content-length"); clen != "" {
 		len, err := strconv.ParseUint(clen, 10, 64)
 		if err == nil {
-			if len >= mw.m.minSize {
-				mw.startEncoding()
+			if len >= rw.c.minSize {
+				rw.startEncoding()
 			} else {
-				mw.dontEncode = true
-				mw.ResponseWriter.WriteHeader(status)
+				rw.dontEncode = true
+				rw.ResponseWriter.WriteHeader(status)
 			}
 			return
 		}
 	}
 
 	// the content length is unknown, buffer the response until it exceeds minSize
-	mw.buff = make([]byte, mw.m.minSize)
+	rw.buff = make([]byte, rw.c.minSize)
 }
 
-func (mw *middlewareWriter) startEncoding() bool {
+func (rw *responseWriter) startEncoding() bool {
 	var err error
-	mw.enc, err = mw.factory(mw.ctx, mw.ResponseWriter)
+	rw.enc, err = rw.factory(rw.ctx, rw.ResponseWriter)
 	if err != nil {
-		if !mw.m.silent {
-			fmt.Printf("Can not create encoder %s: %v\n", mw.encoding, err)
+		if !rw.c.silent {
+			fmt.Printf("Can not create encoder %s: %v\n", rw.encoding, err)
 		}
-		mw.flush()
-		mw.dontEncode = true
+		rw.flush()
+		rw.dontEncode = true
 		return false
 	}
-	mw.shouldEncode = true
-	mw.Header().Del("content-length")
-	mw.Header().Add("content-encoding", mw.encoding)
-	mw.ResponseWriter.WriteHeader(mw.status)
+	rw.shouldEncode = true
+	rw.Header().Del("content-length")
+	rw.Header().Add("content-encoding", rw.encoding)
+	rw.ResponseWriter.WriteHeader(rw.status)
 	return true
 }
 
-func (mw *middlewareWriter) Write(chunk []byte) (int, error) {
-	if !mw.headerSent {
-		mw.WriteHeader(mw.status)
+func (rw *responseWriter) Write(chunk []byte) (int, error) {
+	if !rw.headerSent {
+		rw.WriteHeader(rw.status)
 	}
-	mw.mutex.Lock()
-	defer mw.mutex.Unlock()
+	rw.mutex.Lock()
+	defer rw.mutex.Unlock()
 
-	if mw.shouldEncode {
-		return mw.enc.Write(chunk)
+	if rw.shouldEncode {
+		return rw.enc.Write(chunk)
 	}
-	if mw.dontEncode {
-		return mw.ResponseWriter.Write(chunk)
+	if rw.dontEncode {
+		return rw.ResponseWriter.Write(chunk)
 	}
 
-	newBufLen := mw.buffLen + uint64(len(chunk))
-	if newBufLen > mw.m.minSize {
-		if mw.startEncoding() {
-			if mw.buffLen > 0 {
-				_, err := mw.enc.Write(mw.buff[0:mw.buffLen])
+	newBufLen := rw.buffLen + uint64(len(chunk))
+	if newBufLen > rw.c.minSize {
+		if rw.startEncoding() {
+			if rw.buffLen > 0 {
+				_, err := rw.enc.Write(rw.buff[0:rw.buffLen])
 				if err != nil {
 					return 0, err
 				}
 			}
-			mw.buff = nil
-			mw.buffLen = 0
-			return mw.enc.Write(chunk)
+			rw.buff = nil
+			rw.buffLen = 0
+			return rw.enc.Write(chunk)
 		}
-		return mw.ResponseWriter.Write(chunk)
+		return rw.ResponseWriter.Write(chunk)
 	}
-	n := copy(mw.buff[mw.buffLen:], chunk)
-	mw.buffLen = newBufLen
+	n := copy(rw.buff[rw.buffLen:], chunk)
+	rw.buffLen = newBufLen
 	return n, nil
 }
 
-func (mw *middlewareWriter) flush() {
-	if mw.enc != nil {
-		mw.enc.Close()
+func (rw *responseWriter) flush() {
+	if rw.enc != nil {
+		rw.enc.Close()
 	}
-	if mw.buff != nil && mw.buffLen > 0 {
-		mw.ResponseWriter.Write(mw.buff[0:mw.buffLen])
+	if rw.buff != nil && rw.buffLen > 0 {
+		rw.ResponseWriter.Write(rw.buff[0:rw.buffLen])
 	}
 }
