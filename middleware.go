@@ -1,19 +1,10 @@
 package compress
 
 import (
-	"context"
-	"io"
 	"net/http"
 
 	"github.com/kevinpollet/nego"
 )
-
-type EncoderFactory func(ctx context.Context, w io.Writer) (io.WriteCloser, error)
-
-type encoder struct {
-	priority int
-	factory  EncoderFactory
-}
 
 type Middleware func(http.Handler) http.Handler
 
@@ -31,10 +22,10 @@ func New(options ...Option) Middleware {
 					ctx:            r.Context(),
 					factory:        enc.factory,
 					encoding:       encoding,
-					c:              c,
+					conf:           c,
 					status:         http.StatusOK,
 				}
-				defer mw.flush()
+				defer mw.end()
 				w = mw
 			}
 			h.ServeHTTP(w, r)

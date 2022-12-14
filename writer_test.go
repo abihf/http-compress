@@ -15,7 +15,7 @@ func Test_withKnowContentEncoding(t *testing.T) {
 	encoding := "gzip"
 	rw := responseWriter{
 		ResponseWriter: w,
-		c:              c,
+		conf:           c,
 		ctx:            context.Background(),
 		factory:        c.encoders[encoding].factory,
 		encoding:       encoding,
@@ -35,7 +35,7 @@ func Test_withKnowContentLength(t *testing.T) {
 	encoding := "gzip"
 	rw := responseWriter{
 		ResponseWriter: w,
-		c:              c,
+		conf:           c,
 		ctx:            context.Background(),
 		factory:        c.encoders[encoding].factory,
 		encoding:       encoding,

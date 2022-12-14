@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"sync"
+)
+
+var (
+	_ http.ResponseWriter = &responseWriter{}
+	_ http.Flusher        = &responseWriter{}
 )
 
 type responseWriter struct {
 	http.ResponseWriter
-	c        *config
+
+	conf     *config
 	ctx      context.Context
 	factory  EncoderFactory
 	enc      io.WriteCloser
@@ -22,12 +27,11 @@ type responseWriter struct {
 	shouldEncode bool
 
 	headerSent bool
+	statusSent bool
 	status     int
 
 	buff    []byte
 	buffLen uint64
-
-	mutex sync.Mutex
 }
 
 func matchRegexes(str string, res []*regexp.Regexp) bool {
@@ -39,10 +43,22 @@ func matchRegexes(str string, res []*regexp.Regexp) bool {
 	return false
 }
 
+func (rw *responseWriter) sendStatus() {
+	if !rw.statusSent {
+		rw.statusSent = true
+		rw.ResponseWriter.WriteHeader(rw.status)
+	}
+}
+
 func (rw *responseWriter) WriteHeader(status int) {
-	rw.mutex.Lock()
-	defer rw.mutex.Unlock()
 	rw.status = status
+	rw.writeHeader()
+}
+
+func (rw *responseWriter) writeHeader() {
+	if rw.headerSent {
+		return
+	}
 	rw.headerSent = true
 
 	cenc := rw.Header().Get("content-encoding")
@@ -52,9 +68,9 @@ func (rw *responseWriter) WriteHeader(status int) {
 	// or content type is not defined
 	// or content type is not in allowed list
 	// => just forward the body
-	if cenc != "" || ctype == "" || !matchRegexes(ctype, rw.c.allowedType) {
+	if cenc != "" || ctype == "" || !matchRegexes(ctype, rw.conf.allowedType) {
 		rw.dontEncode = true
-		rw.ResponseWriter.WriteHeader(status)
+		rw.sendStatus()
 		return
 	}
 
@@ -62,44 +78,40 @@ func (rw *responseWriter) WriteHeader(status int) {
 	if clen := rw.Header().Get("content-length"); clen != "" {
 		len, err := strconv.ParseUint(clen, 10, 64)
 		if err == nil {
-			if len >= rw.c.minSize {
+			if len >= rw.conf.minSize {
 				rw.startEncoding()
 			} else {
 				rw.dontEncode = true
-				rw.ResponseWriter.WriteHeader(status)
+				rw.sendStatus()
 			}
 			return
 		}
 	}
 
 	// the content length is unknown, buffer the response until it exceeds minSize
-	rw.buff = make([]byte, rw.c.minSize)
+	rw.buff = make([]byte, rw.conf.minSize)
 }
 
 func (rw *responseWriter) startEncoding() bool {
 	var err error
 	rw.enc, err = rw.factory(rw.ctx, rw.ResponseWriter)
 	if err != nil {
-		if !rw.c.silent {
+		if !rw.conf.silent {
 			fmt.Printf("Can not create encoder %s: %v\n", rw.encoding, err)
 		}
-		rw.flush()
+		rw.end()
 		rw.dontEncode = true
 		return false
 	}
 	rw.shouldEncode = true
 	rw.Header().Del("content-length")
-	rw.Header().Add("content-encoding", rw.encoding)
-	rw.ResponseWriter.WriteHeader(rw.status)
+	rw.Header().Set("content-encoding", rw.encoding)
+	rw.sendStatus()
 	return true
 }
 
 func (rw *responseWriter) Write(chunk []byte) (int, error) {
-	if !rw.headerSent {
-		rw.WriteHeader(rw.status)
-	}
-	rw.mutex.Lock()
-	defer rw.mutex.Unlock()
+	rw.writeHeader()
 
 	if rw.shouldEncode {
 		return rw.enc.Write(chunk)
@@ -109,7 +121,7 @@ func (rw *responseWriter) Write(chunk []byte) (int, error) {
 	}
 
 	newBufLen := rw.buffLen + uint64(len(chunk))
-	if newBufLen > rw.c.minSize {
+	if newBufLen > rw.conf.minSize {
 		if rw.startEncoding() {
 			if rw.buffLen > 0 {
 				_, err := rw.enc.Write(rw.buff[0:rw.buffLen])
@@ -128,11 +140,42 @@ func (rw *responseWriter) Write(chunk []byte) (int, error) {
 	return n, nil
 }
 
-func (rw *responseWriter) flush() {
+func (rw *responseWriter) end() {
+	rw.sendStatus()
+
 	if rw.enc != nil {
 		rw.enc.Close()
 	}
 	if rw.buff != nil && rw.buffLen > 0 {
 		rw.ResponseWriter.Write(rw.buff[0:rw.buffLen])
+	}
+}
+
+func (rw *responseWriter) Flush() {
+	if rw.shouldEncode {
+		flushWriter(rw.enc)
+		flushWriter(rw.ResponseWriter)
+		return
+	}
+
+	if rw.buffLen > 0 {
+		rw.ResponseWriter.Write(rw.buff[0:rw.buffLen])
+		rw.dontEncode = true
+		rw.buff = nil
+		rw.buffLen = 0
+	}
+	flushWriter(rw.ResponseWriter)
+}
+
+// gzip Flush() returns error
+type flusherWithErr interface {
+	Flush() error
+}
+
+func flushWriter(w interface{}) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	} else if f, ok := w.(flusherWithErr); ok {
+		f.Flush()
 	}
 }

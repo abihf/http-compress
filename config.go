@@ -2,6 +2,8 @@ package compress
 
 import (
 	"compress/gzip"
+	"context"
+	"io"
 	"regexp"
 	"sort"
 )
@@ -21,6 +23,13 @@ type config struct {
 	allowedType []*regexp.Regexp
 	minSize     uint64
 	silent      bool
+}
+
+type EncoderFactory func(ctx context.Context, w io.Writer) (io.WriteCloser, error)
+
+type encoder struct {
+	priority int
+	factory  EncoderFactory
 }
 
 func newConfig(options ...Option) *config {
