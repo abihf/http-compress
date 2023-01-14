@@ -9,22 +9,13 @@ import (
 type Middleware func(http.Handler) http.Handler
 
 func New(options ...Option) Middleware {
-	c := newConfig(options...)
+	conf := newConfig(options...)
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Vary", "Accept-Encoding")
 
-			encoding := nego.NegotiateContentEncoding(r, c.supportedEncoding...)
-			enc, ok := c.encoders[encoding]
-			if ok {
-				mw := &responseWriter{
-					ResponseWriter: w,
-					ctx:            r.Context(),
-					factory:        enc.factory,
-					encoding:       encoding,
-					conf:           c,
-					status:         http.StatusOK,
-				}
+			encoding := nego.NegotiateContentEncoding(r, conf.supportedEncoding...)
+			if mw, ok := newResponseWriter(r, w, conf, encoding); ok {
 				defer mw.end()
 				w = mw
 			}
