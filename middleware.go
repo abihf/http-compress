@@ -19,6 +19,7 @@ func New(options ...Option) Middleware {
 			if ok {
 				mw := &responseWriter{
 					ResponseWriter: w,
+					req : r,
 					ctx:            r.Context(),
 					factory:        enc.factory,
 					encoding:       encoding,

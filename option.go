@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"net/http"
 	"regexp"
 )
 
@@ -39,8 +40,12 @@ func WithMinSize(minSize uint64) Option {
 	}
 }
 
-func WithSilent() Option {
+func WithErrorHandler(handler ErrorHandler) Option  {
 	return func(c *config) {
-		c.silent = true
+		c.errorHandler = handler
 	}
+}
+
+func DefaultErrorHandler(err error, r *http.Request, w http.ResponseWriter)  {
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
